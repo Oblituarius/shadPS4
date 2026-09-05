@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <mutex>
+#include <thread>
 #include <vector>
 #include "core/libraries/kernel/threads.h"
 #include "core/module.h"
@@ -173,6 +174,24 @@ private:
     AppHeapAPI heap_api{};
     std::vector<std::unique_ptr<Module>> m_modules;
     Loader::SymbolsResolver m_hle_symbols{};
+
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // 1s watchdog that logs HLE call count and PS4 pthread states while the
+    // eboot is silent. Tells us if the eboot main thread is alive, blocked,
+    // or crashed. Started in Execute, joined on destruction. Gated by
+    // D1_PRESERVATION_WATCHDOG so upstream builds are unaffected.
+#ifdef D1_PRESERVATION_WATCHDOG
+    std::jthread watchdog{};
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // Native handle to the eboot main thread, captured by the lambda in
+    // Execute so the watchdog can SuspendThread+GetThreadContext to read
+    // the guest RIP. Set after main_thread.Run, read by the watchdog.
+    // Zero before the eboot starts; watchdog treats 0 as "no sample yet".
+    void* eboot_main_handle{};
+    // Entry address the eboot will start at, recorded by Execute for RIP
+    // delta computation (entry_addr -> current_addr distance walked).
+    u64 eboot_entry_addr{};
+#endif
 };
 
 } // namespace Core

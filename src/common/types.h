@@ -25,7 +25,13 @@ static_assert(sizeof(u128) == 16, "u128 must be 128 bits wide");
 using VAddr = uintptr_t;
 using PAddr = uintptr_t;
 
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Empty PS4_SYSV_ABI on MSVC: `sysv_abi` attribute unrecognised (C2065), Win32 path is a translation layer and does not need the GCC name-mangling.
+#ifdef _MSC_VER
+#define PS4_SYSV_ABI
+#else
 #define PS4_SYSV_ABI __attribute__((sysv_abi))
+#endif
 
 // UDLs for memory size values
 constexpr unsigned long long operator""_KB(unsigned long long x) {

@@ -5,14 +5,20 @@
 #include "common/assert.h"
 #include "common/decoder.h"
 #include "common/signal_context.h"
+#include "common/singleton.h"
+#include "common/types.h"
 #include "core/cpu_patches.h" // Windows static guest red-zone protection
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/threads/exception.h"
+#include "core/linker.h"
 #include "core/signals.h"
 #include "emulator.h"
 
 #ifdef _WIN32
 #include <windows.h>
+#ifdef ARCH_X86_64
+#include <Zydis/Formatter.h>
+#endif
 static constexpr DWORD MS_VC_EXCEPTION = 0x406D1388;
 #else
 #include <csignal>
@@ -142,7 +148,106 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
                                       ? static_protection_exception
                                       : code != EXCEPTION_BREAKPOINT;
     if (report_unhandled) { // Windows static guest red-zone protection
-        LOG_CRITICAL(Debug, "Unhandled Exception code {:#x} at {}", code, address);
+        // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+        // Identify the module owning the PC and disassemble the faulting instr so a SIGSEGV in the user region leaves a breadcrumb.
+        const VAddr pc = static_cast<VAddr>(guest_context.uc_mcontext.mc_rip);
+        const char* mod_name = "<unmapped>";
+        if (auto* linker = Common::Singleton<Core::Linker>::Instance(); linker) {
+            if (auto* mod = linker->FindByAddress(pc); mod) {
+                mod_name = mod->name.c_str();
+            }
+        }
+        // Disassemble using the same decoder the Linux branch uses.
+        char disasm[256] = "<unable to decode>";
+#ifdef ARCH_X86_64
+        ZydisDecodedInstruction instr;
+        ZydisDecodedOperand ops[ZYDIS_MAX_OPERAND_COUNT];
+        if (ZYAN_SUCCESS(Common::Decoder::Instance()->decodeInstruction(instr, ops,
+                                                                       reinterpret_cast<void*>(pc)))) {
+            ZydisFormatter formatter;
+            ZydisFormatterInit(&formatter, ZYDIS_FORMATTER_STYLE_INTEL);
+            ZydisFormatterFormatInstruction(&formatter, &instr, ops, instr.operand_count_visible,
+                                            disasm, sizeof(disasm), pc, ZYAN_NULL);
+        }
+        // Also walk the guest stack to find the return address (the call site
+        // of the host stub that just returned). This is what identifies the
+        // missing HLE function by the import that was stubbed.
+        const VAddr rsp = static_cast<VAddr>(guest_context.uc_mcontext.mc_rsp);
+        VAddr ret_addr = 0;
+        std::memcpy(&ret_addr, reinterpret_cast<const void*>(rsp), sizeof(ret_addr));
+        const char* ret_mod = "<unmapped>";
+        if (auto* linker = Common::Singleton<Core::Linker>::Instance(); linker) {
+            if (auto* mod = linker->FindByAddress(ret_addr); mod) {
+                ret_mod = mod->name.c_str();
+            }
+        }
+        const VAddr ret_off = ret_addr; // base subtraction done by reader
+        // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+        // Dump a 6-frame call stack and the registers that point at the bad destination; rdi is the dest of `mov [rdi], rax` and almost always the cause, rsi/rdx tell which call just returned.
+        std::string stack_trace = "\n  return-to " + fmt::format("{:#x} in module {}", ret_addr, ret_mod);
+        // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+        // Walk the call chain by rbp frame pointers; PS4 SysV prologue is `push rbp; mov rbp, rsp` so each frame has [rbp]=saved rbp and [rbp+8]=return address.
+        VAddr frame_rbp = guest_context.uc_mcontext.mc_rbp;
+        for (int frame = 1; frame <= 6 && frame_rbp != 0; ++frame) {
+            VAddr frame_ret = 0;
+            if (!std::memcpy(&frame_ret, reinterpret_cast<const void*>(frame_rbp + 8),
+                             sizeof(frame_ret))) {
+                break;
+            }
+            const char* frame_mod = "<unmapped>";
+            if (auto* linker = Common::Singleton<Core::Linker>::Instance(); linker) {
+                if (auto* mod = linker->FindByAddress(frame_ret); mod) {
+                    frame_mod = mod->name.c_str();
+                }
+            }
+            stack_trace += "\n  frame " + std::to_string(frame) + ": " +
+                           fmt::format("{:#x} in module {}", frame_ret, frame_mod);
+            VAddr next_rbp = 0;
+            if (!std::memcpy(&next_rbp, reinterpret_cast<const void*>(frame_rbp),
+                             sizeof(next_rbp))) {
+                break;
+            }
+            if (next_rbp <= frame_rbp) {
+                break; // rbp must strictly grow
+            }
+            frame_rbp = next_rbp;
+        }
+        const u64 rdi_val = guest_context.uc_mcontext.mc_rdi;
+        const u64 rsi_val = guest_context.uc_mcontext.mc_rsi;
+        const u64 rdx_val = guest_context.uc_mcontext.mc_rdx;
+        const u64 rcx_val = guest_context.uc_mcontext.mc_rcx;
+        const u64 rax_val = guest_context.uc_mcontext.mc_rax;
+        const u64 rbp_val = guest_context.uc_mcontext.mc_rbp;
+        const u64 r8_val = guest_context.uc_mcontext.mc_r8;
+        const u64 r9_val = guest_context.uc_mcontext.mc_r9;
+        // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+        // Dump 16 bytes at the host alias of the faulting PC and 32 bytes at rsp+0; IsBadReadPtr is fault-safe so an unmapped read does not re-fault.
+        u8 pc_bytes[16] = {0};
+        u8 rsp_bytes[32] = {0};
+        if (!::IsBadReadPtr(reinterpret_cast<const void*>(pc), sizeof(pc_bytes))) {
+            std::memcpy(pc_bytes, reinterpret_cast<const void*>(pc), sizeof(pc_bytes));
+        }
+        if (!::IsBadReadPtr(reinterpret_cast<const void*>(rsp), sizeof(rsp_bytes))) {
+            std::memcpy(rsp_bytes, reinterpret_cast<const void*>(rsp), sizeof(rsp_bytes));
+        }
+        std::string pc_hex;
+        std::string rsp_hex;
+        for (u8 b : pc_bytes) {
+            pc_hex += fmt::format("{:02x} ", b);
+        }
+        for (u8 b : rsp_bytes) {
+            rsp_hex += fmt::format("{:02x} ", b);
+        }
+        LOG_CRITICAL(Debug,
+                     "Unhandled Exception code {:#x} at {} in module {}: {}{}\n  "
+                     "rax={:#x} rcx={:#x} rdx={:#x} rsi={:#x} rdi={:#x} rbp={:#x} r8={:#x} r9={:#x} rsp={:#x}\n  "
+                     "pc_bytes: {}\n  rsp_bytes: {}",
+                     code, address, mod_name, disasm, stack_trace, rax_val, rcx_val, rdx_val,
+                     rsi_val, rdi_val, rbp_val, r8_val, r9_val, rsp, pc_hex, rsp_hex);
+#else
+        LOG_CRITICAL(Debug, "Unhandled Exception code {:#x} at {} in module {}", code, address,
+                     mod_name);
+#endif
         Common::Singleton<Core::Emulator>::Instance()->Shutdown();
     }
 

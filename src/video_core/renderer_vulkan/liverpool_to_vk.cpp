@@ -758,19 +758,23 @@ static size_t GetSurfaceFormatTableIndex(AmdGpu::DataFormat data_format,
     return result;
 }
 
-static auto surface_format_table = []() constexpr {
-    std::array<vk::Format, 1 << amd_gpu_data_format_bit_size * 1 << amd_gpu_number_format_bit_size>
-        result;
-    for (auto& entry : result) {
-        entry = vk::Format::eUndefined;
-    }
-    for (const auto& supported_format : SurfaceFormats()) {
-        result[GetSurfaceFormatTableIndex(supported_format.data_format,
-                                          supported_format.number_format)] =
-            supported_format.vk_format;
-    }
-    return result;
-}();
+static auto surface_format_table =
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // Drop constexpr on the IIFE: MSVC static-init trips on vk::Format literal-type rules.
+    []() {
+        std::array<vk::Format,
+                   1 << amd_gpu_data_format_bit_size * 1 << amd_gpu_number_format_bit_size>
+            result;
+        for (auto& entry : result) {
+            entry = vk::Format::eUndefined;
+        }
+        for (const auto& supported_format : SurfaceFormats()) {
+            result[GetSurfaceFormatTableIndex(supported_format.data_format,
+                                              supported_format.number_format)] =
+                supported_format.vk_format;
+        }
+        return result;
+    }();
 
 vk::Format SurfaceFormat(AmdGpu::DataFormat data_format, AmdGpu::NumberFormat num_format) {
     vk::Format result = surface_format_table[GetSurfaceFormatTableIndex(data_format, num_format)];

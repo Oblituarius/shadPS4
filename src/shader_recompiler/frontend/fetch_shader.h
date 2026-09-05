@@ -36,7 +36,9 @@ struct VertexAttribute {
         return static_cast<InstanceIdType>(instance_data);
     }
 
-    constexpr AmdGpu::Buffer GetSharp(const Shader::Info& info) const noexcept {
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // Drop constexpr: body reads runtime `info` via ReadUdReg; MSVC C3615 (GCC accepts as ext).
+    AmdGpu::Buffer GetSharp(const Shader::Info& info) const noexcept {
         auto buffer = info.ReadUdReg<AmdGpu::Buffer>(sgpr_base, dword_offset);
         buffer.base_address += inst_offset;
         if (data_format) {

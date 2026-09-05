@@ -30,6 +30,14 @@ enum class FloatClassFunc : u32 {
     Finite = NegativeNormal | NegativeDenorm | NegativeZero | PositiveNormal | PositiveDenorm |
              PositiveZero,
 };
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Add operator==/!= for FloatClassFunc: MSVC enum class + DECLARE_ENUM_FLAG_OPERATORS only gives bitwise ops.
+inline bool operator==(FloatClassFunc a, FloatClassFunc b) noexcept {
+    return static_cast<u32>(a) == static_cast<u32>(b);
+}
+inline bool operator!=(FloatClassFunc a, FloatClassFunc b) noexcept {
+    return !(a == b);
+}
 DECLARE_ENUM_FLAG_OPERATORS(FloatClassFunc)
 
 union TextureInstInfo {

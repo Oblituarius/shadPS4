@@ -109,10 +109,12 @@ namespace Libraries::Font::Internal {
 struct alignas(16) LayoutWord {
     std::array<u32, 4> words{};
 
-    constexpr u8* data() {
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // Drop constexpr: reinterpret_cast is not a constant expression under MSVC C3615.
+    u8* data() {
         return reinterpret_cast<u8*>(words.data());
     }
-    constexpr const u8* data() const {
+    const u8* data() const {
         return reinterpret_cast<const u8*>(words.data());
     }
 };

@@ -345,7 +345,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
     Common::AccurateTimer timer{vblank_period};
 
-    const auto receive_request = [this] -> Request {
+    const auto receive_request = [this]() -> Request {
         std::scoped_lock lk{mutex};
         if (!requests.empty()) {
             const auto request = requests.front();

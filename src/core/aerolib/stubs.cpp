@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Map __builtin_return_address to _ReturnAddress on MSVC.
+#ifdef _MSC_VER
+#define __builtin_return_address(_x) _ReturnAddress()
+#endif
+
 #include "common/logging/log.h"
 #include "core/aerolib/aerolib.h"
 #include "core/aerolib/stubs.h"
@@ -67,7 +73,13 @@ u64 GetStub(const char* nid) {
         stub_nids[UsedStubEntries] = entry;
     }
 
-    return (u64)stub_handlers[UsedStubEntries++];
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // Log stub index and the host VA we are handing back so the SUSPECT band (0x7000_xxxx_xxxx) can be cross-checked against the actual function address of CommonStubTemplate<N>.
+    const u32 idx = UsedStubEntries;
+    const u64 va = (u64)stub_handlers[UsedStubEntries++];
+    LOG_INFO(Core, "AeroLib::GetStub idx={} va={:#x} nid={} name={}", idx, va, nid ? nid : "<null>",
+             entry ? entry->name : "<unknown>");
+    return va;
 }
 
 } // namespace Core::AeroLib

@@ -12,7 +12,6 @@
 #include "common/logging/log.h"
 #include "common/thread.h"
 #include "core/libraries/audio/audioout.h"
-#include "core/libraries/audio/audioout_backend.h"
 #include "core/libraries/audio/audioout_error.h"
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/libs.h"

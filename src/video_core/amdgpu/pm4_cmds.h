@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <bit>
 #include <cstring>
 #include "common/assert.h"
 #include "common/bit_field.h"
@@ -276,13 +277,17 @@ struct PM4CmdStrmoutBufferUpdate {
     template <typename T = u64>
     T DstAddress() const {
         ASSERT(update_memory.Value() == 1);
-        return reinterpret_cast<T>(dst_address_lo.Value() | u64(dst_address_hi & 0xFFFF) << 32);
+        // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+        // bit_cast: same-type reinterpret_cast trips MSVC C2440; bit_cast is well-formed.
+        return std::bit_cast<T>(dst_address_lo.Value() | u64(dst_address_hi & 0xFFFF) << 32);
     }
 
     template <typename T = u64>
     T SrcAddress() const {
         ASSERT(source_select.Value() == SourceSelect::SrcAddress);
-        return reinterpret_cast<T>(src_address_lo.Value() | u64(src_address_hi & 0xFFFF) << 32);
+        // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+        // bit_cast: same-type reinterpret_cast trips MSVC C2440; bit_cast is well-formed.
+        return std::bit_cast<T>(src_address_lo.Value() | u64(src_address_hi & 0xFFFF) << 32);
     }
 };
 
@@ -999,7 +1004,9 @@ struct PM4CmdSetBase {
     T Address() const {
         ASSERT(base_index == BaseIndex::DisplayListPatchTable ||
                base_index == BaseIndex::DrawIndexIndirPatchTable);
-        return reinterpret_cast<T>(address0 | (u64(address1 & 0xffff) << 32u));
+        // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+        // bit_cast: same-type reinterpret_cast trips MSVC C2440; bit_cast is well-formed.
+        return std::bit_cast<T>(address0 | (u64(address1 & 0xffff) << 32u));
     }
 };
 

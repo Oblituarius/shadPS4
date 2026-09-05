@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <thread>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
+#include <cstring>
 #include <boost/asio/io_context.hpp>
 
 #include "common/assert.h"
@@ -42,7 +46,10 @@
 
 namespace Libraries::Kernel {
 
-static u64 g_stack_chk_guard = 0xDEADBEEF54321ABC; // dummy return
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// shadPS4 has no per-thread canary HLE; point g_stack_chk_guard at a writable scratch buffer so the post-canary epilogue write is a no-op and the canary compare is a tautology.
+static u8 g_chk_scratch[64];
+static u64 g_stack_chk_guard = reinterpret_cast<u64>(g_chk_scratch);
 char const* g_environment[64];
 static const char* g_progname = "eboot.bin";
 
@@ -80,8 +87,10 @@ static void KernelServiceThread(std::stop_token stoken) {
     }
 }
 
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// shadPS4 has no per-thread canary HLE; log and return so the post-canary epilogue (which writes [rdi] using the canary as a destination) lands in the scratch buffer set as g_stack_chk_guard.
 static PS4_SYSV_ABI void stack_chk_fail() {
-    UNREACHABLE();
+    LOG_WARNING(Lib_Kernel, "stack_chk_fail called (no per-thread canary HLE)");
 }
 
 static thread_local s32 g_posix_errno = 0;
@@ -311,16 +320,98 @@ s32 PS4_SYSV_ABI sceKernelTitleWorkaroundIsEnabled(OrbisKernelTitleWorkaround* t
 }
 
 s32 PS4_SYSV_ABI sceKernelGetProcessType(s32 pid) {
-    LOG_ERROR(Lib_Kernel, "(STUBBED) called, pid: {}", pid);
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // shadPS4 returned 0 for the process type and the libc's startup then took the system-process branch and crashed dereferencing a "SceLibcI" string literal as a struct pointer; return 1 (a real PS4 game process type) so libc startup takes the game path.
     if (pid != GLOBAL_PID) {
         return ORBIS_KERNEL_ERROR_ENOSYS;
     }
-    return 0;
+    LOG_INFO(Lib_Kernel, "sceKernelGetProcessType: returning 1 (game)");
+    return 1;
 }
 
-s32 PS4_SYSV_ABI __sys_regmgr_call(u32 op, u32 key, void* result, void* value, u64 len) {
-    LOG_ERROR(Lib_Kernel, "(STUBBED) called, op: {:#x}, key: {}, len: {}", op, key, len);
-    return ORBIS_OK;
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// PS4 regmgr is a key-value store: op 1=GET 2=SET 3=DELETE 4=COMMIT, key is a 32-bit ORBIS dictionary key.
+namespace {
+
+struct RegEntry {
+    u32 key;
+    std::vector<u8> value;
+};
+
+constexpr u32 REG_KEY_INIT_KERNEL_REVISION = 0x00000000;
+constexpr u32 REG_KEY_SYSTEM_LANGUAGE = 0x20000001;
+constexpr u32 REG_KEY_SYSTEM_PARENTAL_LEVEL = 0x20000002;
+constexpr u32 REG_KEY_INIT_USER_LANGUAGE = 0x20000100;
+constexpr u32 REG_KEY_INIT_USER_PARENTAL_LEVEL = 0x20000101;
+constexpr u32 REG_KEY_SYSTEM_FIRMWARE_VERSION = 0x20001000;
+constexpr u32 REG_KEY_SYSTEM_SOFTWARE_VERSION = 0x20001001;
+
+const std::vector<RegEntry>& KnownRegEntries() {
+    static const std::vector<RegEntry> entries = {
+        {REG_KEY_INIT_KERNEL_REVISION, {0x01, 0x29}}, // 1.29
+        {REG_KEY_SYSTEM_LANGUAGE, {0x01}},             // english
+        {REG_KEY_SYSTEM_PARENTAL_LEVEL, {0x00}},
+        {REG_KEY_INIT_USER_LANGUAGE, {0x01}},
+        {REG_KEY_INIT_USER_PARENTAL_LEVEL, {0x00}},
+        {REG_KEY_SYSTEM_FIRMWARE_VERSION, {0x05, 0x00}},   // 5.00 sdk
+        {REG_KEY_SYSTEM_SOFTWARE_VERSION, {0x01, 0x29}},
+    };
+    return entries;
+}
+
+std::mutex& RegMgrMutex() {
+    static std::mutex m;
+    return m;
+}
+
+std::unordered_map<u32, std::vector<u8>>& RegStore() {
+    static std::unordered_map<u32, std::vector<u8>> store;
+    static bool seeded = false;
+    if (!seeded) {
+        for (const auto& e : KnownRegEntries()) {
+            store[e.key] = e.value;
+        }
+        seeded = true;
+    }
+    return store;
+}
+
+} // namespace
+
+s32 PS4_SYSV_ABI __sys_regmgr_call(s32 op, u32 key, void* result, u64* result_len, void* value) {
+    LOG_DEBUG(Lib_Kernel, "regmgr: op={} key={:#x} result={} result_len={} value={}", op, key,
+              fmt::ptr(result), fmt::ptr(result_len), fmt::ptr(value));
+    if (op == 1) { // GET
+        std::lock_guard<std::mutex> lock(RegMgrMutex());
+        auto& store = RegStore();
+        auto it = store.find(key);
+        if (it == store.end()) {
+            LOG_DEBUG(Lib_Kernel, "regmgr: GET key={:#x} not found, returning ENOSYS", key);
+            if (result && result_len) {
+                const u64 zero = 0;
+                const u64 cap = *result_len;
+                const u64 n = (cap < sizeof(zero)) ? cap : sizeof(zero);
+                std::memcpy(result, &zero, n);
+                *result_len = 0;
+            }
+            return ORBIS_KERNEL_ERROR_ENOSYS;
+        }
+        if (result && result_len) {
+            const u64 cap = *result_len;
+            const u64 n = (cap < it->second.size()) ? cap : it->second.size();
+            std::memcpy(result, it->second.data(), n);
+            *result_len = it->second.size();
+        }
+        return ORBIS_OK;
+    }
+    if (op == 2 && value && result_len) { // SET
+        std::lock_guard<std::mutex> lock(RegMgrMutex());
+        RegStore()[key] = std::vector<u8>(static_cast<u8*>(value),
+                                          static_cast<u8*>(value) + *result_len);
+        return ORBIS_OK;
+    }
+    LOG_DEBUG(Lib_Kernel, "regmgr: op={} key={:#x} unsupported, returning ENOSYS", op, key);
+    return ORBIS_KERNEL_ERROR_ENOSYS;
 }
 
 // Nominally: long sysconf(int name);

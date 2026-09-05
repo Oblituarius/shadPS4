@@ -2,12 +2,22 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Wrap header in #pragma pack(1) on MSVC; the fork's __attribute__((packed)) is a GCC extension.
 #include <filesystem>
 #include <mutex>
 #include <span>
 #include <vector>
 #include "common/io_file.h"
 #include "core/libraries/playgo/playgo_types.h"
+
+#ifdef _MSC_VER
+#pragma pack(push, 1)
+// MSVC has no `__attribute__` keyword; provide no-op macros so the
+// trailing `__attribute__((packed))` syntax on each struct below parses
+// as a (vacuous) declaration modifier.
+#define __attribute__(x)
+#endif
 
 constexpr u32 PLAYGO_MAGIC = 0x6F676C70;
 
@@ -129,3 +139,7 @@ private:
     PlaygoHeader playgoHeader;
     std::mutex speed_mutex;
 };
+
+#ifdef _MSC_VER
+#pragma pack(pop)
+#endif

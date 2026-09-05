@@ -65,7 +65,9 @@ struct LocalRuntimeInfo {
 struct ExportRuntimeInfo : protected CommonEsVsRuntimeInfo {
     u32 vertex_data_size;
 
-    bool operator<=>(const ExportRuntimeInfo&) const noexcept = default;
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // Use `auto` return for defaulted operator<=>: MSVC C7634 rejects `bool`; GCC accepts as extension.
+    auto operator<=>(const ExportRuntimeInfo&) const noexcept = default;
 };
 
 enum class Output : u8 {
@@ -106,7 +108,9 @@ struct VertexRuntimeInfo : protected CommonEsVsRuntimeInfo {
     /// UCP_ENA bits from PA_CL_CLIP_CNTL, lowered to clip distances in the shader.
     u32 user_clip_plane_mask{};
 
-    bool operator<=>(const VertexRuntimeInfo& other) const noexcept = default;
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // See ExportRuntimeInfo: same `auto` spaceship return to fix MSVC C7634.
+    auto operator<=>(const VertexRuntimeInfo& other) const noexcept = default;
 };
 
 struct HullRuntimeInfo : protected CommonHsEsVsRuntimeInfo {

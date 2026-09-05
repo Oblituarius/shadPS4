@@ -20,6 +20,7 @@
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/memory.h"
 #include "core/libraries/kernel/threads.h"
+#include "core/libraries/kernel/threads/thread_state.h"
 #include "core/libraries/libc_internal/libc_internal.h"
 #include "core/libraries/sysmodule/sysmodule.h"
 #include "core/libraries/sysmodule/sysmodule_internal.h"
@@ -31,6 +32,11 @@
 #ifndef _WIN32
 #include <signal.h>
 #endif
+#ifdef D1_PRESERVATION_WATCHDOG
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#endif
 
 namespace Core {
 
@@ -38,26 +44,33 @@ static PS4_SYSV_ABI void ProgramExitFunc() {
     LOG_ERROR(Core_Linker, "Exit function called");
 }
 
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// MSVC x64 has no inline-asm: tail-call eboot via a function pointer cast.
+static PS4_SYSV_ABI void* RunMainEntryTrampoline [[noreturn]] (EntryParams* params) {
+    using EbootEntry = void (*)(EntryParams*, ExitFunc) [[noreturn]];
+    auto fn = reinterpret_cast<EbootEntry>(params->entry_addr);
+    fn(params, &ProgramExitFunc);
+    UNREACHABLE();
+}
+
 static PS4_SYSV_ABI void* RunMainEntry [[noreturn]] (EntryParams* params) {
 #ifdef ARCH_X86_64
+#ifdef _MSC_VER
+    RunMainEntryTrampoline(params);
+#else
     // Start shared library modules
     asm volatile("andq $-16, %%rsp\n" // Align to 16 bytes
                  "subq $8, %%rsp\n"   // videoout_basic expects the stack to be misaligned
-
-                 // Kernel also pushes some more things here during process init
-                 // at least: environment, auxv, possibly other things
-
+                 // Kernel pushes more here during process init
                  "pushq 8(%1)\n" // copy EntryParams to top of stack like the kernel does
                  "pushq 0(%1)\n" // OpenOrbis expects to find it there
-
                  "movq %1, %%rdi\n" // also pass params and exit func
                  "movq %2, %%rsi\n" // as before
-
-                 "jmp *%0\n" // can't use call here, as that would mangle the prepared stack.
-                             // there's no coming back
+                 "jmp *%0\n" // can't use call here, as that would mangle the prepared stack
                  :
                  : "r"(params->entry_addr), "r"(params), "r"(ProgramExitFunc)
                  : "rax", "rsi", "rdi");
+#endif
     UNREACHABLE();
 #else
     UNREACHABLE_MSG("RunMainEntry unimplemented for current architecture.");
@@ -147,6 +160,34 @@ void Linker::Execute(const std::vector<std::string>& args) {
     memory->SetupMemoryRegions(fmem_size, use_extended_mem1, use_extended_mem2);
 
     main_thread.Run([this, module, &args, has_libcinternal](std::stop_token) {
+#ifdef D1_PRESERVATION_WATCHDOG
+        // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+        // Confirm the lambda is actually running. If we never see this
+        // line, the eboot main host thread is stuck before this point.
+        LOG_INFO(Core_Linker, "D1-WATCHDOG: eboot main lambda entered");
+#ifdef _WIN32
+        // Capture a real handle to this thread FIRST, before any blocking
+        // call (IPC::WaitForStart). The watchdog needs THREAD_ALL_ACCESS
+        // to SuspendThread+GetThreadContext. DuplicateHandle on the pseudo
+        // handle produces a proper handle to the same Win32 thread.
+        {
+            HANDLE pseudo = ::GetCurrentThread();
+            HANDLE real = nullptr;
+            const DWORD tid = ::GetCurrentThreadId();
+            if (::DuplicateHandle(::GetCurrentProcess(), pseudo, ::GetCurrentProcess(), &real,
+                                  THREAD_ALL_ACCESS, FALSE, 0) != 0 &&
+                real != nullptr) {
+                eboot_main_handle = real;
+                LOG_INFO(Core_Linker,
+                         "D1-WATCHDOG: eboot main handle captured tid={} handle=0x{:p}", tid,
+                         real);
+            } else {
+                LOG_ERROR(Core_Linker, "D1-WATCHDOG: DuplicateHandle failed: {}",
+                          ::GetLastError());
+            }
+        }
+#endif
+#endif
         Common::SetCurrentThreadName("Game:Main");
         std::set_terminate(Common::Log::Terminate);
 
@@ -214,8 +255,100 @@ void Linker::Execute(const std::vector<std::string>& args) {
 
         // Run the game's entry function
         params.entry_addr = module->GetEntryAddress();
+#ifdef D1_PRESERVATION_WATCHDOG
+        eboot_entry_addr = params.entry_addr;
+#endif
         RunMainEntry(&params);
     });
+
+#ifdef D1_PRESERVATION_WATCHDOG
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // 1-second watchdog: log HLE call count, PS4 pthread states, and the
+    // eboot main thread's current RIP (sampled by SuspendThread +
+    // GetThreadContext). Tells us if the eboot main thread is alive,
+    // blocked, or crashed, AND where in the guest code it currently is.
+    // Auto-joined when this Linker is destroyed (jthread destructor).
+    watchdog = std::jthread([this](std::stop_token stop) {
+        u64 last_hle_total = 0;
+        u64 last_rip = 0;
+        u64 tick = 0;
+        while (Common::StoppableTimedWait(stop, std::chrono::seconds(1))) {
+            ++tick;
+            const u64 hle_total = Core::HleBridgeCallCounter().load(std::memory_order_relaxed);
+            const u64 hle_delta = hle_total - last_hle_total;
+            last_hle_total = hle_total;
+
+            // Walk the PS4 pthread set under the list lock.
+            std::string names;
+            int running = 0, dead = 0;
+            static int handle_still_null_warned = 0;
+            if (eboot_main_handle == nullptr && handle_still_null_warned == 0) {
+                handle_still_null_warned = 1;
+                LOG_WARNING(Core_Linker, "D1-WATCHDOG: tick={} eboot_main_handle is still null",
+                            tick);
+            }
+            if (auto* ts = Libraries::Kernel::ThrState::Instance()) {
+                std::scoped_lock lk{ts->thread_list_lock};
+                for (auto* p : ts->threads) {
+                    if (p->state == Libraries::Kernel::PthreadState::Running) {
+                        ++running;
+                    } else {
+                        ++dead;
+                    }
+                    if (!names.empty()) {
+                        names += ',';
+                    }
+                    names += p->name.empty() ? std::string("<unnamed>") : p->name;
+                }
+            }
+
+            // Sample the eboot main thread's RIP if the lambda has captured
+            // a handle. SuspendThread / GetThreadContext / ResumeThread pause
+            // the host thread only long enough to read its CONTEXT.
+#ifdef _WIN32
+            u64 rip = 0;
+            u64 rsp_val = 0;
+            int rip_ok = 0;
+            if (eboot_main_handle != nullptr) {
+                HANDLE h = static_cast<HANDLE>(eboot_main_handle);
+                if (::SuspendThread(h) != static_cast<DWORD>(-1)) {
+                    CONTEXT ctx{};
+                    ctx.ContextFlags = CONTEXT_FULL;
+                    if (::GetThreadContext(h, &ctx) != 0) {
+                        rip = ctx.Rip;
+                        rsp_val = ctx.Rsp;
+                        rip_ok = 1;
+                    } else {
+                        LOG_ERROR(Core_Linker, "D1-WATCHDOG: GetThreadContext failed: {}",
+                                  ::GetLastError());
+                    }
+                    ::ResumeThread(h);
+                } else {
+                    LOG_ERROR(Core_Linker, "D1-WATCHDOG: SuspendThread failed: {}",
+                              ::GetLastError());
+                }
+            }
+            const u64 rip_delta = (rip_ok && last_rip != 0) ? (rip - last_rip) : 0;
+            last_rip = rip;
+            // rip is the JIT/decoder RIP; entry_addr is the guest entry. Both
+            // are u64. The delta is u64, which will wrap negative deltas to
+            // huge positive numbers but still tells us "moved or not".
+            const u64 rip_from_entry = rip_ok ? rip - eboot_entry_addr : 0;
+            LOG_INFO(Core_Linker,
+                     "[D1-WATCHDOG] tick={} hle_total={} hle_delta={} pthreads={{running:{} "
+                     "dead:{} names=[{}]}} rip=0x{:016x} rsp=0x{:016x} rip_delta=0x{:x} "
+                     "rip_from_entry=0x{:x}",
+                     tick, hle_total, hle_delta, running, dead, names, rip, rsp_val, rip_delta,
+                     rip_from_entry);
+#else
+            LOG_INFO(Core_Linker,
+                     "[D1-WATCHDOG] tick={} hle_total={} hle_delta={} pthreads={{running:{} "
+                     "dead:{} names=[{}]}} (rip sampling Windows-only)",
+                     tick, hle_total, hle_delta, running, dead, names);
+#endif
+        }
+    });
+#endif
 }
 
 s32 Linker::LoadModule(const std::filesystem::path& elf_name, bool is_dynamic) {
@@ -398,7 +531,8 @@ bool Linker::Resolve(const std::string& name, Loader::SymbolType sym_type, Modul
         LOG_ERROR(Core_Linker, "Not Resolved {}", name);
         return false;
     }
-
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // MSVC x64 has no inline-asm: tail-call eboot via a function pointer cast.
     const LibraryInfo* library = m->FindLibrary(ids[1]);
     const ModuleInfo* module = m->FindModule(ids[2]);
     ASSERT_MSG(library && module, "Unable to find library and module");

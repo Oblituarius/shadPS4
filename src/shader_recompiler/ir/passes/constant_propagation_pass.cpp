@@ -262,21 +262,53 @@ void FoldMul(IR::Block& block, IR::Inst& inst) {
     }
 }
 
+// D1-PRESERVATION FORK-LOCAL CHANGE - NOT AN UPSTREAM FIX
+// Per-bit composition: same root cause as vector_alu.cpp V_CMP_CLASS_F32.
 void FoldCmpClass(IR::Block& block, IR::Inst& inst) {
     ASSERT_MSG(inst.Arg(1).IsImmediate(), "Unable to resolve compare operation");
     const auto class_mask = static_cast<IR::FloatClassFunc>(inst.Arg(1).U32());
-    if ((class_mask & IR::FloatClassFunc::NaN) == IR::FloatClassFunc::NaN) {
-        inst.ReplaceOpcode(IR::Opcode::FPIsNan32);
-    } else if ((class_mask & IR::FloatClassFunc::Infinity) == IR::FloatClassFunc::Infinity) {
-        inst.ReplaceOpcode(IR::Opcode::FPIsInf32);
-    } else if ((class_mask & IR::FloatClassFunc::Finite) == IR::FloatClassFunc::Finite) {
-        IR::IREmitter ir{block, IR::Block::InstructionList::s_iterator_to(inst)};
-        const IR::F32 value = IR::F32{inst.Arg(0)};
-        inst.ReplaceUsesWithAndRemove(
-            ir.LogicalNot(ir.LogicalOr(ir.FPIsNan(value), ir.FPIsInf(value))));
-    } else {
-        UNREACHABLE();
+    IR::IREmitter ir{block, IR::Block::InstructionList::s_iterator_to(inst)};
+    const IR::F32 value = IR::F32{inst.Arg(0)};
+    if (class_mask == IR::FloatClassFunc{}) {
+        // Empty mask: V_CMP_CLASS always returns false. (An empty bit-set is legal in GCN.)
+        inst.ReplaceUsesWithAndRemove(ir.Imm1(false));
+        return;
     }
+    IR::U1 result = ir.Imm1(false);
+    const auto add = [&](IR::U1 v) { result = ir.LogicalOr(result, v); };
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // Compare mask&FLAG to FloatClassFunc{}: MSVC has no operator!=(FloatClassFunc, int).
+    if ((class_mask & IR::FloatClassFunc::QuietNan) != IR::FloatClassFunc{} ||
+        (class_mask & IR::FloatClassFunc::SignalingNan) != IR::FloatClassFunc{}) {
+        add(ir.FPIsNan(value));
+    }
+    if ((class_mask & IR::FloatClassFunc::NegativeInfinity) != IR::FloatClassFunc{}) {
+        add(ir.LogicalAnd(ir.FPIsInf(value), ir.FPLessThan(value, ir.Imm32(0.f))));
+    }
+    if ((class_mask & IR::FloatClassFunc::PositiveInfinity) != IR::FloatClassFunc{}) {
+        add(ir.LogicalAnd(ir.FPIsInf(value), ir.FPGreaterThan(value, ir.Imm32(0.f))));
+    }
+    if ((class_mask & IR::FloatClassFunc::NegativeNormal) != IR::FloatClassFunc{}) {
+        add(ir.FPLessThan(value, ir.Imm32(-1.175494e-38f)));
+    }
+    if ((class_mask & IR::FloatClassFunc::NegativeDenorm) != IR::FloatClassFunc{}) {
+        add(ir.LogicalAnd(ir.FPLessThan(value, ir.Imm32(-0.f)),
+                           ir.FPGreaterThanEqual(value, ir.Imm32(-1.175494e-38f))));
+    }
+    if ((class_mask & IR::FloatClassFunc::NegativeZero) != IR::FloatClassFunc{}) {
+        add(ir.FPEqual(value, ir.Imm32(-0.f)));
+    }
+    if ((class_mask & IR::FloatClassFunc::PositiveZero) != IR::FloatClassFunc{}) {
+        add(ir.FPEqual(value, ir.Imm32(0.f)));
+    }
+    if ((class_mask & IR::FloatClassFunc::PositiveDenorm) != IR::FloatClassFunc{}) {
+        add(ir.LogicalAnd(ir.FPGreaterThan(value, ir.Imm32(0.f)),
+                           ir.FPLessThanEqual(value, ir.Imm32(1.175494e-38f))));
+    }
+    if ((class_mask & IR::FloatClassFunc::PositiveNormal) != IR::FloatClassFunc{}) {
+        add(ir.FPGreaterThan(value, ir.Imm32(1.175494e-38f)));
+    }
+    inst.ReplaceUsesWithAndRemove(result);
 }
 
 bool FoldPackedAncillary(IR::Block& block, IR::Inst& inst) {

@@ -15,8 +15,10 @@ class Scheduler;
 
 namespace VideoCore {
 
-class Image;
-class ImageView;
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// struct not class: class-key mismatch on forward decl makes MSVC mangle as `class` and break ImageView::ImageView link.
+struct Image;
+struct ImageView;
 struct ImageInfo;
 
 class BlitHelper {

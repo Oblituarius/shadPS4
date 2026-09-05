@@ -160,7 +160,7 @@ void Translator::DS_OP(const GcnInst& inst, AtomicOp op, bool rtn) {
     const IR::U32 offset =
         ir.Imm32((u32(inst.control.ds.offset1) << 8u) + u32(inst.control.ds.offset0));
     const IR::U32 addr_offset = ir.IAdd(addr, offset);
-    const T original_val = [&] -> T {
+    const T original_val = [&]() -> T {
         switch (op) {
         case AtomicOp::Add:
             return ir.SharedAtomicIAdd(addr_offset, data, is_gds);

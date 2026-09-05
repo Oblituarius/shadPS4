@@ -7,8 +7,8 @@
 
 namespace HostShaders {
 
-constexpr std::string_view @CONTENTS_NAME@ = R"shader_src(
-@CONTENTS@
-)shader_src";
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Inline CONTENTS directly; cmake now wraps each chunk in R"shader_src(...)shader_src".
+constexpr std::string_view @CONTENTS_NAME@ = @CONTENTS@;
 
 } // namespace HostShaders

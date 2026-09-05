@@ -62,7 +62,9 @@ endif()
 if (ARCHITECTURE STREQUAL "x86_64")
     # Target x86-64-v3 CPU architecture as this is a good balance between supporting performance critical
     # instructions like AVX2 and maintaining support for older CPUs.
-    add_compile_options(-march=x86-64-v3)
+    if (NOT MSVC)
+        add_compile_options(-march=x86-64-v3)
+    endif()
 endif()
 
 cmake_host_system_information(RESULT PROC_INFO QUERY PROCESSOR_DESCRIPTION)
@@ -367,7 +369,11 @@ set(KERNEL_LIB src/core/libraries/kernel/coredump/coredump.cpp
 )
 
 if (ARCHITECTURE STREQUAL "x86_64" OR ARCHITECTURE STREQUAL "arm64")
-    list(APPEND KERNEL_LIB src/core/libraries/kernel/threads/stack_asm.cpp)
+    # D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    # Exclude stack_asm.cpp on Windows: GNU inline asm, MSVC rejects. pthread.cpp has a stub.
+    if (NOT WIN32)
+        list(APPEND KERNEL_LIB src/core/libraries/kernel/threads/stack_asm.cpp)
+    endif()
 endif()
 
 set(NETWORK_LIBS src/core/libraries/network/http.cpp
@@ -600,6 +606,9 @@ set(RANDOM_LIB src/core/libraries/random/random.cpp
                src/core/libraries/random/random_error.h
 )
 
+# D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+# Exclude USBD on Windows: libusb is POSIX-only, fork has no shim, and D1 does not bind to sceUsbd*.
+if (NOT WIN32)
 set(USBD_LIB src/core/libraries/usbd/usbd.cpp
              src/core/libraries/usbd/usbd.h
              src/core/libraries/usbd/usb_backend.h
@@ -610,12 +619,29 @@ set(USBD_LIB src/core/libraries/usbd/usbd.cpp
              src/core/libraries/usbd/emulated/skylander.cpp
              src/core/libraries/usbd/emulated/skylander.h
 )
+else()
+# D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+# usbd_win_stub.cpp provides empty RegisterLib + usb_backend so ipc.cpp/libs.cpp link on Windows.
+set(USBD_LIB src/core/libraries/usbd/usbd_win_stub.cpp
+             src/core/libraries/usbd/usbd.h
+             src/core/libraries/usbd/usb_backend.h
+)
+endif()
 
+# D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+# Exclude fiber_context.cpp on Windows: hand-written GNU x86-64 asm, no MSVC equivalent.
+if (NOT WIN32)
 set(FIBER_LIB src/core/libraries/fiber/fiber_context.cpp
               src/core/libraries/fiber/fiber.cpp
               src/core/libraries/fiber/fiber.h
               src/core/libraries/fiber/fiber_error.h
 )
+else()
+set(FIBER_LIB src/core/libraries/fiber/fiber.cpp
+              src/core/libraries/fiber/fiber.h
+              src/core/libraries/fiber/fiber_error.h
+)
+endif()
 
 set(VDEC_LIB src/core/libraries/videodec/video_utils.cpp
              src/core/libraries/videodec/video_utils.h
@@ -1275,15 +1301,43 @@ target_link_libraries(shadps4 PRIVATE libprotobuf)
 target_link_libraries(shadps4 PRIVATE ZArchive::zarchive)
 target_include_directories(shadps4 PRIVATE "${SHADNET_PROTO_OUT}")
 
+# D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+# Skip libusb link on Windows: bundled header uses GCC attributes MSVC rejects; Win32 uses SDL3 hidapi + xinput.
 if (${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD")
     target_link_libraries(shadps4 PRIVATE "/usr/lib/libusb.so")
     target_link_libraries(shadps4 PRIVATE "/usr/local/lib/libuuid.so")
-else()
+elseif(NOT WIN32)
     target_link_libraries(shadps4 PRIVATE libusb::usb)
 endif()
 
 target_compile_definitions(shadps4 PRIVATE IMGUI_USER_CONFIG="imgui/imgui_config.h")
 target_compile_definitions(Dear_ImGui PRIVATE IMGUI_USER_CONFIG="${PROJECT_SOURCE_DIR}/src/imgui/imgui_config.h")
+
+# D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+# Add /bigobj: src/core/aerolib/aerolib.cpp trips C1128 on MSVC 19.38.
+if (MSVC)
+    target_compile_options(shadps4 PRIVATE /bigobj)
+    # D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    # Add /Zm500: std::array<PageState, 2^28> in page_manager.cpp blows cl.exe default 75 MB heap (C1060).
+    target_compile_options(shadps4 PRIVATE /Zm500)
+    # D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    # Set FMT_USE_CONSTEVAL=0: fmt v12 fstring on non-constant args (e.g. magic_enum) trips MSVC C7595.
+    target_compile_definitions(shadps4 PRIVATE FMT_USE_CONSTEVAL=0)
+    # D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    # Enable the HostCallWrapperImpl bad-pointer guard: libc preinit calls
+    # pass small integers (rdx=0x1) where pointer-typed args are expected.
+    target_compile_definitions(shadps4 PRIVATE D1_PRESERVATION_BAD_GUEST_PTR_GUARD)
+    # D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    # Enable the HLE bridge trace: log first 50 host calls (function pointer
+    # address) and a heartbeat every 5000. Used to diagnose "black screen"
+    # runs where the guest is silent. Disable to silence.
+    target_compile_definitions(shadps4 PRIVATE D1_PRESERVATION_HLE_TRACE)
+    # D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    # Enable the 1-second watchdog thread in Linker::Execute: logs HLE call
+    # total, HLE delta, and PS4 pthread state every second. Tells us if the
+    # eboot main thread is alive, blocked, or crashed. Disable to silence.
+    target_compile_definitions(shadps4 PRIVATE D1_PRESERVATION_WATCHDOG)
+endif()
 
 if (ENABLE_DISCORD_RPC)
     target_compile_definitions(shadps4 PRIVATE ENABLE_DISCORD_RPC)
@@ -1395,6 +1449,19 @@ endif()
 add_compile_definitions(BOOST_ASIO_STANDALONE)
 
 target_include_directories(shadps4 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+# Prepend the libusb-stub include path on Windows: usb_backend.h's #include <libusb.h> must resolve to the shim.
+if (WIN32)
+    target_include_directories(shadps4 PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/externals/libusb-stub/include"
+    )
+    # D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    # Add libusb_stub.cpp: provide libusb_* symbols for inline vtable-emitting TU (runtime is unreachable).
+    target_sources(shadps4 PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/externals/libusb-stub/libusb_stub.cpp"
+    )
+endif()
 
 # Shaders sources
 set(HOST_SHADERS_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/src/video_core/host_shaders)

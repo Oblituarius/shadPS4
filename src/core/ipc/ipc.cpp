@@ -102,14 +102,14 @@ void IPC::SendRestart(const std::vector<std::string>& args) {
 }
 
 void IPC::InputLoop() {
-    auto next_str = [&] -> const std::string& {
+    auto next_str = [&]() -> const std::string& {
         static std::string line_buffer;
         do {
             std::getline(std::cin, line_buffer, '\n');
         } while (!line_buffer.empty() && line_buffer.back() == '\\');
         return line_buffer;
     };
-    auto next_u64 = [&] -> u64 {
+    auto next_u64 = [&]() -> u64 {
         auto& str = next_str();
         return std::stoull(str, nullptr, 0);
     };

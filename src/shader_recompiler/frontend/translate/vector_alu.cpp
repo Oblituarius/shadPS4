@@ -1314,17 +1314,53 @@ void Translator::V_CMP_U64(ConditionOp op, bool is_signed, bool set_exec, const 
 void Translator::V_CMP_CLASS_F32(const GcnInst& inst) {
     const IR::F32 src0{GetSrc<IR::F32>(inst.src[0])};
     const IR::U32 src1{GetSrc(inst.src[1])};
-    IR::U1 value;
+    // D1-PRESERVATION FORK-LOCAL CHANGE - NOT AN UPSTREAM FIX
+    // Compose per-bit; upstream `(mask & NaN) == NaN` UNREACHABLEs on partial masks.
+    IR::U1 value = ir.Imm1(false);
     if (src1.IsImmediate()) {
         const auto class_mask = static_cast<IR::FloatClassFunc>(src1.U32());
-        if ((class_mask & IR::FloatClassFunc::NaN) == IR::FloatClassFunc::NaN) {
-            value = ir.FPIsNan(src0);
-        } else if ((class_mask & IR::FloatClassFunc::Infinity) == IR::FloatClassFunc::Infinity) {
-            value = ir.FPIsInf(src0);
-        } else if ((class_mask & IR::FloatClassFunc::Negative) == IR::FloatClassFunc::Negative) {
-            value = ir.FPLessThanEqual(src0, ir.Imm32(-0.f));
-        } else {
-            UNREACHABLE_MSG("Unsupported float class mask: {:#x}", static_cast<u32>(class_mask));
+        const auto add = [&](IR::U1 v) { value = ir.LogicalOr(value, v); };
+        // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+        // Compare mask&FLAG to FloatClassFunc{}: MSVC has no operator!=(FloatClassFunc, int).
+        if ((class_mask & IR::FloatClassFunc::QuietNan) !=
+                IR::FloatClassFunc{} ||
+            (class_mask & IR::FloatClassFunc::SignalingNan) !=
+                IR::FloatClassFunc{}) {
+            add(ir.FPIsNan(src0));
+        }
+        if ((class_mask & IR::FloatClassFunc::NegativeInfinity) !=
+            IR::FloatClassFunc{}) {
+            add(ir.LogicalAnd(ir.FPIsInf(src0), ir.FPLessThan(src0, ir.Imm32(0.f))));
+        }
+        if ((class_mask & IR::FloatClassFunc::PositiveInfinity) !=
+            IR::FloatClassFunc{}) {
+            add(ir.LogicalAnd(ir.FPIsInf(src0), ir.FPGreaterThan(src0, ir.Imm32(0.f))));
+        }
+        if ((class_mask & IR::FloatClassFunc::NegativeNormal) !=
+            IR::FloatClassFunc{}) {
+            add(ir.FPLessThan(src0, ir.Imm32(-1.175494e-38f)));
+        }
+        if ((class_mask & IR::FloatClassFunc::NegativeDenorm) !=
+            IR::FloatClassFunc{}) {
+            add(ir.LogicalAnd(ir.FPLessThan(src0, ir.Imm32(-0.f)),
+                              ir.FPGreaterThanEqual(src0, ir.Imm32(-1.175494e-38f))));
+        }
+        if ((class_mask & IR::FloatClassFunc::NegativeZero) !=
+            IR::FloatClassFunc{}) {
+            add(ir.FPEqual(src0, ir.Imm32(-0.f)));
+        }
+        if ((class_mask & IR::FloatClassFunc::PositiveZero) !=
+            IR::FloatClassFunc{}) {
+            add(ir.FPEqual(src0, ir.Imm32(0.f)));
+        }
+        if ((class_mask & IR::FloatClassFunc::PositiveDenorm) !=
+            IR::FloatClassFunc{}) {
+            add(ir.LogicalAnd(ir.FPGreaterThan(src0, ir.Imm32(0.f)),
+                              ir.FPLessThanEqual(src0, ir.Imm32(1.175494e-38f))));
+        }
+        if ((class_mask & IR::FloatClassFunc::PositiveNormal) !=
+            IR::FloatClassFunc{}) {
+            add(ir.FPGreaterThan(src0, ir.Imm32(1.175494e-38f)));
         }
     } else {
         // We don't know the type yet, delay its resolution.

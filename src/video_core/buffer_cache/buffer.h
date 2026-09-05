@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <vector>
 #include "common/types.h"
@@ -184,7 +185,14 @@ public:
     u64 Copy(auto src, size_t size, size_t alignment = 0) {
         const auto [data, offset] = Map(size, alignment);
         auto* memory = Core::Memory::Instance();
-        const VAddr src_vaddr = reinterpret_cast<const VAddr>(src);
+        // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+        // if constexpr: src may be VAddr (u64) or pointer; reinterpret_cast rules differ for each.
+        VAddr src_vaddr;
+        if constexpr (std::is_pointer_v<decltype(src)>) {
+            src_vaddr = reinterpret_cast<VAddr>(src);
+        } else {
+            src_vaddr = static_cast<VAddr>(src);
+        }
         if (memory->IsValidMapping(src_vaddr)) {
             memory->CopySparseMemory(src_vaddr, data, size);
         } else {

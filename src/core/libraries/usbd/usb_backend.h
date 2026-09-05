@@ -12,9 +12,13 @@
 
 namespace Libraries::Usbd {
 
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Include <windows.h> on Windows: CRITICAL_SECTION needs the Win SDK prep headers winnt.h expects.
 #if defined(_WIN32)
+#include <windows.h>
 typedef CRITICAL_SECTION usbi_mutex_t;
 #else
+#include <pthread.h>
 typedef pthread_mutex_t usbi_mutex_t;
 #endif
 

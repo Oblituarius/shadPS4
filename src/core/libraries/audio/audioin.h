@@ -7,6 +7,7 @@
 #include <mutex>
 #include <core/libraries/system/userservice.h>
 #include "common/types.h"
+#include "core/libraries/audio/audioin_backend.h"
 
 namespace Core::Loader {
 class SymbolsResolver;
@@ -14,7 +15,8 @@ class SymbolsResolver;
 
 namespace Libraries::AudioIn {
 
-class PortInBackend;
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// PortInBackend now complete-type via audioin_backend.h: same MSVC unique_ptr<PortInBackend> rationale as audioout.h.
 
 constexpr s32 ORBIS_AUDIO_IN_NUM_PORTS = 7;
 

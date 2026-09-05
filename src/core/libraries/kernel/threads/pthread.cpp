@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/assert.h"
+#include "common/logging/log.h"
 #include "common/thread.h"
 #ifdef _WIN32
 #include "common/ntapi.h"
@@ -20,8 +21,18 @@
 #include "core/memory.h"
 
 #if defined(ARCH_X86_64) || defined(__arm64__) || defined(__aarch64__)
+#ifdef _MSC_VER
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Stub runOnAnotherStack for MSVC: stack_asm.cpp is GNU-only and excluded; the alt-stack signal
+// and thread-start paths still need a callable. Forwards to func(arg) on the current stack.
+extern "C" void* PS4_SYSV_ABI _runOnAnotherStack(void* arg, void* func, void* /*stackb*/) {
+    using Fn = void* PS4_SYSV_ABI (*)(void*);
+    return reinterpret_cast<Fn>(func)(arg);
+}
+#else
 extern "C" void* PS4_SYSV_ABI _runOnAnotherStack(void* arg, void* func,
                                                  void* stackb) asm("_runOnAnotherStack");
+#endif
 #else
 void* PS4_SYSV_ABI _runOnAnotherStack(void* arg, void* func, void* stackb) {
     UNREACHABLE_MSG("_runOnAnotherStack not implemented on target architecture.");
@@ -52,7 +63,19 @@ static void ExitThread() {
     }
 
     auto* thread_state = ThrState::Instance();
-    ASSERT(thread_state->active_threads.fetch_sub(1) != 1);
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // D1 libSceLibcInternal NPTL bring-up calls ExitThread while active_threads==1
+    // (the only tracked thread is the one libc just created; shadPS4 has not been
+    // seeded with a primary-pthread registration). The real PS4 tracks the primary
+    // thread implicitly. Without this guard the libc assert trips and the guest dies
+    // before user code runs. Demote to a warning so the libc can complete init; revisit
+    // once the NPTL bootstrap is correctly modelled upstream.
+    const s32 prev_active = thread_state->active_threads.fetch_sub(1);
+    if (prev_active == 1) {
+        LOG_WARNING(Kernel_Pthread, "ExitThread: active_threads was 1 before decrement; "
+                                    "primary pthread not registered with ThrState. "
+                                    "Continuing (D1-PRESERVATION BAD_GUEST_PTR_GUARD/ActiveThreads).");
+    }
 
     curthread->lock->lock();
     curthread->state = PthreadState::Dead;

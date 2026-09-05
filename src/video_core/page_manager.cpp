@@ -87,9 +87,23 @@ struct PageManager::Impl {
     static constexpr size_t ADDRESS_BITS = 40;
     static constexpr size_t NUM_ADDRESS_PAGES = 1ULL << (40 - PM_PAGE_BITS);
     static constexpr size_t NUM_ADDRESS_LOCKS = NUM_ADDRESS_PAGES / PAGES_PER_LOCK;
+#ifdef PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
+    using LockType = Common::AdaptiveMutex;
+#else
+    using LockType = Common::SpinLock;
+#endif
     inline static Vulkan::Rasterizer* rasterizer;
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // Heap-allocate 256 MB+ arrays: inline std::array blows cl.exe's heap on page_manager.cpp (C1060).
+    std::unique_ptr<PageState[]> cached_pages;
+    std::unique_ptr<LockType[]> locks;
+    void AllocateState() {
+        cached_pages = std::make_unique<PageState[]>(NUM_ADDRESS_PAGES);
+        locks = std::make_unique<LockType[]>(NUM_ADDRESS_LOCKS);
+    }
 #ifdef ENABLE_USERFAULTFD
     Impl(Vulkan::Rasterizer* rasterizer_) {
+        AllocateState();
         rasterizer = rasterizer_;
         uffd = syscall(__NR_userfaultfd, O_CLOEXEC | O_NONBLOCK | UFFD_USER_MODE_ONLY);
         ASSERT_MSG(uffd != -1, "{}", Common::GetLastErrorMsg());
@@ -182,6 +196,7 @@ struct PageManager::Impl {
     int uffd;
 #else
     Impl(Vulkan::Rasterizer* rasterizer_) {
+        AllocateState();
         rasterizer = rasterizer_;
 
         // Should be called first.
@@ -226,8 +241,8 @@ struct PageManager::Impl {
         const u64 page_end = Common::DivCeil(addr + size, PM_PAGE_SIZE);
 
         // Acquire locks for the range of pages
-        const auto lock_start = locks.begin() + (page / PAGES_PER_LOCK);
-        const auto lock_end = locks.begin() + Common::DivCeil(page_end, PAGES_PER_LOCK);
+        const auto lock_start = locks.get() + (page / PAGES_PER_LOCK);
+        const auto lock_end = locks.get() + Common::DivCeil(page_end, PAGES_PER_LOCK);
         Common::RangeLockGuard lk(lock_start, lock_end);
 
         auto perms = cached_pages[page].Perms();
@@ -355,13 +370,6 @@ struct PageManager::Impl {
         release_pending();
     }
 
-    std::array<PageState, NUM_ADDRESS_PAGES> cached_pages{};
-#ifdef PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
-    using LockType = Common::AdaptiveMutex;
-#else
-    using LockType = Common::SpinLock;
-#endif
-    std::array<LockType, NUM_ADDRESS_LOCKS> locks{};
 };
 
 PageManager::PageManager(Vulkan::Rasterizer* rasterizer_)

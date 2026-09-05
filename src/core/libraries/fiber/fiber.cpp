@@ -8,6 +8,13 @@
 #include "core/libraries/fiber/fiber_error.h"
 #include "core/libraries/libs.h"
 #include "core/tls.h"
+#include <cstdlib>
+
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Map __builtin_trap() to __debugbreak on MSVC (9 call sites use it as a "should never reach" marker).
+#ifdef _MSC_VER
+#define __builtin_trap() __debugbreak()
+#endif
 
 namespace Libraries::Fiber {
 
@@ -23,13 +30,39 @@ OrbisFiberContext* GetFiberContext() {
     return Core::GetTcbBase()->tcb_fiber;
 }
 
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Stub the asm-decorated fiber functions on MSVC: real bodies live in fiber_context.cpp (hand-written GNU asm, excluded from MSVC build).
+#ifdef _MSC_VER
+extern "C" s32 PS4_SYSV_ABI _sceFiberSetJmp(OrbisFiberContext* ctx) {
+    (void)ctx;
+    __debugbreak();
+    return 0;
+}
+extern "C" [[noreturn]] void PS4_SYSV_ABI _sceFiberLongJmp(OrbisFiberContext* ctx) {
+    (void)ctx;
+    __debugbreak();
+    std::abort();
+}
+extern "C" [[noreturn]] void PS4_SYSV_ABI _sceFiberSwitchEntry(OrbisFiberData* data, bool set_fpu) {
+    (void)data;
+    (void)set_fpu;
+    __debugbreak();
+    std::abort();
+}
+extern "C" void PS4_SYSV_ABI _sceFiberForceQuit(u64 ret);
+#else
 extern "C" s32 PS4_SYSV_ABI _sceFiberSetJmp(OrbisFiberContext* ctx) asm("_sceFiberSetJmp");
 extern "C" s32 PS4_SYSV_ABI _sceFiberLongJmp(OrbisFiberContext* ctx) asm("_sceFiberLongJmp");
 extern "C" void PS4_SYSV_ABI _sceFiberSwitchEntry(OrbisFiberData* data,
                                                   bool set_fpu) asm("_sceFiberSwitchEntry");
 extern "C" void PS4_SYSV_ABI _sceFiberForceQuit(u64 ret) asm("_sceFiberForceQuit");
+#endif
 
+#ifdef _MSC_VER
+extern "C" void PS4_SYSV_ABI _sceFiberForceQuit(u64 ret) {
+#else
 extern "C" void __attribute__((used)) PS4_SYSV_ABI _sceFiberForceQuit(u64 ret) {
+#endif
     OrbisFiberContext* g_ctx = GetFiberContext();
     g_ctx->return_val = ret;
     _sceFiberLongJmp(g_ctx);

@@ -665,9 +665,17 @@ s32 PS4_SYSV_ABI sceKernelMemoryPoolDecommit(void* addr, u64 len, s32 flags) {
     return memory->PoolDecommit(pool_addr, len);
 }
 
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Defensive guard: libc preinit has been observed invoking HLE batch paths
+// with a non-NULL but invalid struct pointer (rdx=0x1). Refuse fast and
+// report 0 processed so the guest can continue past the bogus call.
 s32 PS4_SYSV_ABI sceKernelMemoryPoolBatch(const OrbisKernelMemoryPoolBatchEntry* entries, s32 count,
                                           s32* num_processed, s32 flags) {
-    if (entries == nullptr) {
+    if (entries == nullptr || reinterpret_cast<VAddr>(entries) < 0x100000000ULL) {
+        LOG_WARNING(Kernel_Vmm, "rejecting batch: entries={} count={}", fmt::ptr(entries), count);
+        if (num_processed != nullptr) {
+            *num_processed = 0;
+        }
         return ORBIS_KERNEL_ERROR_EINVAL;
     }
     s32 result = ORBIS_OK;

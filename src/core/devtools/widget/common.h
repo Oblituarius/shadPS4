@@ -75,7 +75,9 @@ void DrawValueRow(const char* text, T value) {
     } else if constexpr (std::is_base_of_v<BitField<T::position, T::bits, typename T::Type>, T>) {
         return DrawValueRow(text, value.Value());
     } else {
-        static_assert(false, "Unsupported type");
+        // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+        // sizeof(T)==0: MSVC eagerly evaluates static_assert(false) in un-instantiated templates.
+        static_assert(sizeof(T) == 0, "Unsupported type");
     }
 }
 

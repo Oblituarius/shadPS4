@@ -17,6 +17,7 @@ constexpr auto Core_Devices = "Core.Devices";                       ///< Devices
 constexpr auto Core_Linker = "Core.Linker";                         ///< The module linker
 constexpr auto Debug = "Debug";                                     ///< Debugging tools
 constexpr auto Frontend = "Frontend";                               ///< Emulator UI
+constexpr auto HLE_Bridge = "HLE.Bridge";                           ///< D1-PRESERVATION FORK-LOCAL: HLE bridge diagnostic (call trace + heartbeat)
 constexpr auto IPC = "IPC";                                         ///< IPC
 constexpr auto ImGui = "ImGui";                                     ///< ImGui
 constexpr auto Input = "Input";                                     ///< Input emulation

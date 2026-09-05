@@ -4,6 +4,7 @@
 #pragma once
 
 #include <functional>
+#include "common/logging/log.h"
 #include "common/polyfill_thread.h"
 #include "core/libraries/kernel/threads/pthread.h"
 #include "core/tls.h"
@@ -99,8 +100,17 @@ public:
     }
 
     static void* PS4_SYSV_ABI RunWrapper(void* arg) {
+#ifdef D1_PRESERVATION_WATCHDOG
+        LOG_INFO(Core_Linker, "D1-WATCHDOG: RunWrapper entered");
+#endif
         Thread* thr = (Thread*)arg;
+#ifdef D1_PRESERVATION_WATCHDOG
+        LOG_INFO(Core_Linker, "D1-WATCHDOG: RunWrapper about to call func");
+#endif
         thr->func(thr->stop.get_token());
+#ifdef D1_PRESERVATION_WATCHDOG
+        LOG_INFO(Core_Linker, "D1-WATCHDOG: RunWrapper func returned");
+#endif
         return nullptr;
     }
 

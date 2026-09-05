@@ -369,7 +369,9 @@ void Translator::BUFFER_ATOMIC(AtomicOp op, const GcnInst& inst) {
                 ir.CompositeConstruct(ir.GetVectorReg<Shader::IR::U32>(vdata),
                                       ir.GetVectorReg<Shader::IR::U32>(vdata + 1)));
         } else {
-            static_assert(false, "buffer_atomic: type not supported");
+            // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+            // sizeof(T)==0: same MSVC eager-evaluation workaround as devtools/widget/common.h.
+            static_assert(sizeof(T) == 0, "buffer_atomic: type not supported");
         }
     }();
     const IR::Value handle =

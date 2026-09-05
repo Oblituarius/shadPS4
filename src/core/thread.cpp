@@ -68,7 +68,11 @@ void NativeThread::Initialize() {
 #ifdef ARCH_X86_64
     // Set MXCSR and FPUCW registers to the values used by Orbis.
     _mm_setcsr(ORBIS_MXCSR);
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // Wrap GCC fldcw asm in !_WIN64: MSVC has no `asm volatile` syntax.
+#ifndef _WIN64
     asm volatile("fldcw %0" : : "m"(ORBIS_FPUCW));
+#endif
 #endif
 #if _WIN64
     tid = GetCurrentThreadId();

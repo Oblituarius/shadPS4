@@ -568,7 +568,7 @@ void PatchImageSharp(IR::Block& block, IR::Inst& inst, Info& info, Descriptors& 
         const auto view_type = image.GetViewType(image_res.is_array);
 
         IR::Inst* body = inst.Arg(1).Inst();
-        const auto lod_arg = [&] -> IR::Value {
+        const auto lod_arg = [&]() -> IR::Value {
             switch (view_type) {
             case AmdGpu::ImageType::Color1D: // x, [lod]
                 return body->Arg(1);
@@ -904,7 +904,7 @@ void PatchImageSampleArgs(IR::Block& block, IR::Inst& inst, Info& info,
 
     // Load first address components as denoted in 8.2.4 VGPR Usage Sea Islands Series Instruction
     // Set Architecture
-    const IR::Value offset = [&] -> IR::Value {
+    const IR::Value offset = [&]() -> IR::Value {
         if (!inst_info.has_offset) {
             return IR::U32{};
         }
@@ -942,7 +942,7 @@ void PatchImageSampleArgs(IR::Block& block, IR::Inst& inst, Info& info,
     }();
     const IR::F32 bias = inst_info.has_bias ? get_addr_reg(addr_reg++) : IR::F32{};
     const IR::F32 dref = inst_info.is_depth ? get_addr_reg(addr_reg++) : IR::F32{};
-    const auto [derivatives_dx, derivatives_dy] = [&] -> std::pair<IR::Value, IR::Value> {
+    const auto [derivatives_dx, derivatives_dy] = [&]() -> std::pair<IR::Value, IR::Value> {
         if (!inst_info.has_derivatives) {
             return {};
         }
@@ -1000,7 +1000,7 @@ void PatchImageSampleArgs(IR::Block& block, IR::Inst& inst, Info& info,
     };
 
     // Now we can load body components as noted in Table 8.9 Image Opcodes with Sampler
-    const IR::Value coords = [&] -> IR::Value {
+    const IR::Value coords = [&]() -> IR::Value {
         switch (view_type) {
         case AmdGpu::ImageType::Color1D: // x
             addr_reg = addr_reg + 1;
@@ -1031,7 +1031,7 @@ void PatchImageSampleArgs(IR::Block& block, IR::Inst& inst, Info& info,
                                                  : IR::F32{};
     const IR::F32 lod_clamp = inst_info.has_lod_clamp ? get_addr_reg(addr_reg++) : IR::F32{};
 
-    auto texel = [&] -> IR::Value {
+    auto texel = [&]() -> IR::Value {
         if (is_msaa) {
             return ir.ImageRead(handle, coords, {}, ir.Imm32(0U), inst_info);
         }
@@ -1086,7 +1086,7 @@ void PatchImageArgs(IR::Block& block, IR::Inst& inst, Info& info) {
 
     // Now that we know the image type, adjust texture coordinate vector.
     IR::Inst* body = inst.Arg(1).Inst();
-    const auto [coords, arg] = [&] -> std::pair<IR::Value, IR::Value> {
+    const auto [coords, arg] = [&]() -> std::pair<IR::Value, IR::Value> {
         switch (view_type) {
         case AmdGpu::ImageType::Color1D: // x, [lod]
             return {body->Arg(0), body->Arg(1)};

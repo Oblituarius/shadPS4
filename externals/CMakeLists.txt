@@ -185,7 +185,8 @@ endif()
 # Dear ImGui
 add_library(Dear_ImGui
         dear_imgui/imgui.cpp
-        dear_imgui/imgui_demo.cpp
+        # D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+        # Drop imgui_demo.cpp: upstream demo, not consumed; bundled imgui.h lacks ImColor->ImVec4 conversion, MSVC C2440/C2661.
         dear_imgui/imgui_draw.cpp
         dear_imgui/imgui_internal.h
         dear_imgui/imgui_tables.cpp

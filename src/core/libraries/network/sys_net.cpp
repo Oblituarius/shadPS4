@@ -118,7 +118,7 @@ int PS4_SYSV_ABI sys_getsockopt(OrbisNetId s, int level, int optname, void* optv
         LOG_ERROR(Lib_Net, "socket id is invalid = {}", s);
         return -1;
     }
-    auto name = [&] -> std::string_view {
+    auto name = [&]() -> std::string_view {
         switch (level) {
         case ORBIS_NET_SOL_SOCKET:
             return NameOf((OrbisNetSocketSoOption)optname);
@@ -167,7 +167,7 @@ int PS4_SYSV_ABI sys_setsockopt(OrbisNetId s, int level, int optname, const void
         LOG_ERROR(Lib_Net, "socket id is invalid = {}", s);
         return -1;
     }
-    auto name = [&] -> std::string_view {
+    auto name = [&]() -> std::string_view {
         switch (level) {
         case ORBIS_NET_SOL_SOCKET:
             return NameOf((OrbisNetSocketSoOption)optname);

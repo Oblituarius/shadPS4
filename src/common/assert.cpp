@@ -5,7 +5,17 @@
 #include "common/assert.h"
 #include "core/signals.h"
 
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Use __debugbreak on MSVC; keep GCC __asm__ volatile("int $3") path.
+#if defined(_MSC_VER)
 #if defined(ARCH_X86_64)
+#define Crash() __debugbreak()
+#elif defined(ARCH_ARM64)
+#define Crash() __debugbreak()
+#else
+#error "Missing Crash() implementation for target CPU architecture."
+#endif
+#elif defined(ARCH_X86_64)
 #define Crash() __asm__ __volatile__("int $3")
 #elif defined(ARCH_ARM64)
 #define Crash() __asm__ __volatile__("brk 0")

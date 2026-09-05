@@ -8,12 +8,14 @@
 #include <mutex>
 
 #include "common/bit_field.h"
+#include "core/libraries/audio/audioout_backend.h"
 #include "core/libraries/kernel/threads.h"
 #include "core/libraries/system/userservice.h"
 
 namespace Libraries::AudioOut {
 
-class PortBackend;
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// PortBackend is now complete-type via the audioout_backend.h include above.
 
 // Main up to 8 ports, BGM 1 port, voice up to 4 ports,
 // personal up to 4 ports, padspk up to 5 ports, aux 1 port
@@ -118,6 +120,8 @@ struct AudioFormatInfo {
 };
 
 struct PortOut {
+    // D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+    // unique_ptr<PortBackend> dtor needs the complete type; audioout_backend.h is now included above.
     std::mutex mutex;
     std::unique_ptr<PortBackend> impl{};
 

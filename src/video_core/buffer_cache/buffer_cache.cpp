@@ -325,7 +325,7 @@ void BufferCache::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, 
         // Fallback to creating dst buffer on GPU to at least have this data there
     }
     texture_cache.InvalidateMemoryFromGPU(dst, num_bytes);
-    auto& src_buffer = [&] -> const Buffer& {
+    auto& src_buffer = [&]() -> const Buffer& {
         if (src_gds) {
             return gds_buffer;
         }
@@ -334,7 +334,7 @@ void BufferCache::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, 
         SynchronizeBuffer(buffer, src, num_bytes, false, true);
         return buffer;
     }();
-    auto& dst_buffer = [&] -> const Buffer& {
+    auto& dst_buffer = [&]() -> const Buffer& {
         if (dst_gds) {
             return gds_buffer;
         }

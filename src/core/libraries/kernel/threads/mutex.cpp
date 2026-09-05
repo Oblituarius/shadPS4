@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <thread>
+#ifdef _MSC_VER
+#include <intrin.h>  // for _mm_pause() / __yield()
+#endif
 #include "common/arch.h"
 #include "common/assert.h"
 #include "common/types.h"
@@ -20,9 +23,21 @@ static std::mutex MutxStaticLock;
 #define THR_MUTEX_DESTROYED ((PthreadMutex*)2)
 
 #if defined(ARCH_X86_64)
+#ifdef _MSC_VER
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Use _mm_pause() on MSVC; GCC path keeps __asm__ volatile("pause").
+#define CPU_SPINWAIT _mm_pause()
+#else
 #define CPU_SPINWAIT __asm__ volatile("pause")
+#endif
 #elif defined(ARCH_ARM64)
+#ifdef _MSC_VER
+// D1-PRESERVATION FORK-LOCAL BUILD FIX - NOT AN UPSTREAM FIX
+// Use __yield() on MSVC; GCC path keeps __asm__ volatile("yield").
+#define CPU_SPINWAIT __yield()
+#else
 #define CPU_SPINWAIT __asm__ volatile("yield")
+#endif
 #endif
 
 #define CHECK_AND_INIT_MUTEX                                                                       \

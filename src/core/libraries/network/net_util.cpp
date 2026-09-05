@@ -346,10 +346,65 @@ u32 NetUtilInternal::GetNatType() const {
     return nat_type;
 }
 
+// D1-PRESERVATION FORK-LOCAL CHANGE - NOT AN UPSTREAM FIX
+// Use SOCK_DGRAM probe + getifaddrs/GetAdaptersAddresses fallback; SOCK_STREAM hangs on a contained host.
+static bool ChooseFirstNonLoopbackV4(std::string& out) {
+#ifdef _WIN32
+    ULONG buf_len = 16 * 1024;
+    auto buf = std::unique_ptr<char[]>(new char[buf_len]);
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        ULONG ret = GetAdaptersAddresses(AF_INET, 0, nullptr,
+                                         reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.get()),
+                                         &buf_len);
+        if (ret == ERROR_BUFFER_OVERFLOW) {
+            buf = std::unique_ptr<char[]>(new char[buf_len]);
+            continue;
+        }
+        if (ret != NO_ERROR) {
+            return false;
+        }
+        for (auto* a = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.get()); a; a = a->Next) {
+            if (a->OperStatus != IfOperStatusUp) continue;
+            if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+            for (auto* ua = a->FirstUnicastAddress; ua; ua = ua->Next) {
+                if (!ua->Address.lpSockaddr) continue;
+                if (ua->Address.lpSockaddr->sa_family != AF_INET) continue;
+                char b[INET_ADDRSTRLEN]{};
+                inet_ntop(AF_INET,
+                          &reinterpret_cast<sockaddr_in*>(ua->Address.lpSockaddr)->sin_addr,
+                          b, INET_ADDRSTRLEN);
+                out = b;
+                return true;
+            }
+        }
+        return false;
+    }
+    return false;
+#else
+    ifaddrs* ifap = nullptr;
+    if (getifaddrs(&ifap) != 0) {
+        return false;
+    }
+    bool found = false;
+    for (ifaddrs* p = ifap; p; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
+        if ((p->ifa_flags & IFF_LOOPBACK) != 0) continue;
+        char b[INET_ADDRSTRLEN]{};
+        const auto* sin = reinterpret_cast<sockaddr_in*>(p->ifa_addr);
+        inet_ntop(AF_INET, &sin->sin_addr, b, INET_ADDRSTRLEN);
+        out = b;
+        found = true;
+        break;
+    }
+    freeifaddrs(ifap);
+    return found;
+#endif
+}
+
 bool NetUtilInternal::RetrieveIp() {
     std::scoped_lock lock{m_mutex};
 
-    auto sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    auto sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd == -1) {
         return false;
     }
@@ -364,27 +419,32 @@ bool NetUtilInternal::RetrieveIp() {
 #define close closesocket
 #endif
 
-    if (connect(sockfd, (sockaddr*)&sa, sa_len) == -1) {
-        close(sockfd);
-        return false;
+    if (connect(sockfd, (sockaddr*)&sa, sa_len) == 0) {
+        if (getsockname(sockfd, (struct sockaddr*)&sa, &sa_len) == 0) {
+            char netmaskStr[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &sa.sin_addr, netmaskStr, INET_ADDRSTRLEN);
+            ip = netmaskStr;
+            LOG_INFO(Lib_Net, "local ip {} (route probe)", ip);
+            close(sockfd);
+#ifdef _WIN32
+#undef close
+#endif
+            return true;
+        }
     }
-
-    if (getsockname(sockfd, (struct sockaddr*)&sa, &sa_len) == -1) {
-        close(sockfd);
-        return false;
-    }
-
-    char netmaskStr[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &sa.sin_addr, netmaskStr, INET_ADDRSTRLEN);
-    ip = netmaskStr;
-
     close(sockfd);
-
 #ifdef _WIN32
 #undef close
 #endif
 
-    return true;
+    // Fallback: enumerate interfaces and take the first non-loopback AF_INET address.
+    if (ChooseFirstNonLoopbackV4(ip)) {
+        LOG_INFO(Lib_Net, "local ip {} (getifaddrs fallback, no route)", ip);
+        return true;
+    }
+
+    LOG_ERROR(Lib_Net, "RetrieveIp failed (no route, no usable interface)");
+    return false;
 }
 
 int NetUtilInternal::ResolveHostname(const char* hostname, Libraries::Net::OrbisNetInAddr* addr) {
